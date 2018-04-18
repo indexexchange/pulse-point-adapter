@@ -19,12 +19,12 @@
 var Browser = require('browser.js');
 var Classify = require('classify.js');
 var Constants = require('constants.js');
+var Network = require('network.js');
 var Partner = require('partner.js');
 var Size = require('size.js');
 var SpaceCamp = require('space-camp.js');
 var System = require('system.js');
-var Network = require('network.js');
-var Utilities = require('utilities.js');
+var Whoopsie = require('whoopsie.js');
 var EventsService;
 var RenderService;
 
@@ -32,7 +32,6 @@ var RenderService;
 var ConfigValidators = require('config-validators.js');
 var PartnerSpecificValidator = require('pulse-point-htb-validator.js');
 var Scribe = require('scribe.js');
-var Whoopsie = require('whoopsie.js');
 //? }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -40,11 +39,21 @@ var Whoopsie = require('whoopsie.js');
 ////////////////////////////////////////////////////////////////////////////////
 
 /**
- * Partner module template
+ * PulsePointHtb Class for the creation of the Header Tag Bidder
  *
  * @class
  */
 function PulsePointHtb(configs) {
+
+    /* pulsePoint endpoint only works with AJAX */
+    if (!Network.isXhrSupported()) {
+        //? if (DEBUG) {
+        Scribe.warn('Partner PulsePointHtb requires AJAX support. Aborting instantiation.');
+        //? }
+
+        return null;
+    }
+
     /* =====================================
      * Data
      * ---------------------------------- */
@@ -66,6 +75,13 @@ function PulsePointHtb(configs) {
      */
     var __profile;
 
+    /**
+     * Base URL for the bidding end-point.
+     *
+     * @private {object}
+     */
+    var __baseUrl;
+
     /* =====================================
      * Functions
      * ---------------------------------- */
@@ -74,302 +90,199 @@ function PulsePointHtb(configs) {
      * ---------------------------------- */
 
     /**
-     * Generates the request URL and query data to the endpoint for the xSlots
-     * in the given returnParcels.
+     * Generates the request URL to the endpoint for the xSlots in the given
+     * returnParcels.
      *
-     * @param  {object[]} returnParcels
-     *
-     * @return {object}
+     * @param  {object[]} returnParcels [description]
+     * @return {string}            [description]
      */
     function __generateRequestObj(returnParcels) {
+        /* pulsePoint is MRA, thus parcel only contains one slot */
+        var xSlot = returnParcels[0].xSlotRef;
 
-        /* =============================================================================
-         * STEP 2  | Generate Request URL
-         * -----------------------------------------------------------------------------
-         *
-         * Generate the URL to request demand from the partner endpoint using the provided
-         * returnParcels. The returnParcels is an array of objects each object containing
-         * an .xSlotRef which is a reference to the xSlot object from the partner configuration.
-         * Use this to retrieve the placements/xSlots you need to request for.
-         *
-         * If your partner is MRA, returnParcels will be an array of length one. If your
-         * partner is SRA, it will contain any number of entities. In any event, the full
-         * contents of the array should be able to fit into a single request and the
-         * return value of this function should similarly represent a single request to the
-         * endpoint.
-         *
-         * Return an object containing:
-         * queryUrl: the url for the request
-         * data: the query object containing a map of the query string paramaters
-         *
-         * callbackId:
-         *
-         * arbitrary id to match the request with the response in the callback function. If
-         * your endpoint supports passing in an arbitrary ID and returning it as part of the response
-         * please use the callbackType: Partner.CallbackTypes.ID and fill out the adResponseCallback.
-         * Also please provide this adResponseCallback to your bid request here so that the JSONP
-         * response calls it once it has completed.
-         *
-         * If your endpoint does not support passing in an ID, simply use
-         * Partner.CallbackTypes.CALLBACK_NAME and the wrapper will take care of handling request
-         * matching by generating unique callbacks for each request using the callbackId.
-         *
-         * If your endpoint is ajax only, please set the appropriate values in your profile for this,
-         * i.e. Partner.CallbackTypes.NONE and Partner.Requesttypes.AJAX. You also do not need to provide
-         * a callbackId in this case because there is no callback.
-         *
-         * The return object should look something like this:
-         * {
-         *     url: 'http://bidserver.com/api/bids' // base request url for a GET/POST request
-         *     data: { // query string object that will be attached to the base url
-         *        slots: [
-         *             {
-         *                 placementId: 54321,
-         *                 sizes: [[300, 250]]
-         *             },{
-         *                 placementId: 12345,
-         *                 sizes: [[300, 600]]
-         *             },{
-         *                 placementId: 654321,
-         *                 sizes: [[728, 90]]
-         *             }
-         *         ],
-         *         site: 'http://google.com'
-         *     },
-         *     callbackId: '_23sd2ij4i1' //unique id used for pairing requests and responses
-         * }
-         */
+        var queryObj = {
+            imp: [],
+            site: {
+                publisher: {
+                    id: Number(configs.publisherId)
+                },
+                ref: Browser.getReferrer(),
+                page: Browser.getPageUrl()
+            },
+            device: {
+                ua: Browser.getUserAgent(),
+                language: Browser.getLanguage()
+            }
+        };
 
-        /* ---------------------- PUT CODE HERE ------------------------------------ */
-        var queryObj = {};
-        var callbackId = System.generateUniqueId();
+        /* Generate the imp object for each size */
+        for (var i = 0; i < xSlot.sizes.length; i++) {
+            var size = xSlot.sizes[i];
 
-        /* Change this to your bidder endpoint.*/
-        var baseUrl = Browser.getProtocol() + '//someAdapterEndpoint.com/bid';
-
-        /* ---------------- Craft bid request using the above returnParcels --------- */
-
-
-        /* -------------------------------------------------------------------------- */
+            queryObj.imp.push({
+                banner: {
+                    w: size[0],
+                    h: size[1],
+                    id: Number(xSlot.tagId)
+                }
+            });
+        }
 
         return {
-            url: baseUrl,
+            url: __baseUrl,
             data: queryObj,
-            callbackId: callbackId
+            networkParamOverrides: {
+                method: 'POST',
+                contentType: 'text/plain'
+            }
         };
     }
 
-    /* =============================================================================
-     * STEP 3  | Response callback
-     * -----------------------------------------------------------------------------
-     *
-     * This generator is only necessary if the partner's endpoint has the ability
-     * to return an arbitrary ID that is sent to it. It should retrieve that ID from
-     * the response and save the response to adResponseStore keyed by that ID.
-     *
-     * If the endpoint does not have an appropriate field for this, set the profile's
-     * callback type to CallbackTypes.CALLBACK_NAME and omit this function.
-     */
-    function adResponseCallback(adResponse) {
-        /* get callbackId from adResponse here */
-        var callbackId = 0;
-        __baseClass._adResponseStore[callbackId] = adResponse;
-    }
     /* -------------------------------------------------------------------------- */
 
     /* Helpers
      * ---------------------------------- */
 
-    /* =============================================================================
-     * STEP 5  | Rendering Pixel
-     * -----------------------------------------------------------------------------
-     *
-    */
+    /* parses adResponse and ads any demand into outParcels */
+    function __parseResponse(sessionId, bidResponse, returnParcels) {
+        /* MRA, so there will always only be one slot involved */
+        var htSlotId = returnParcels[0].htSlot.getId();
+        var xSlotName = returnParcels[0].xSlotName;
+        var curReturnParcel = returnParcels[0];
 
-     /**
-     * This function will render the pixel given.
-     * @param  {string} pixelUrl Tracking pixel img url.
-     */
-    function __renderPixel(pixelUrl) {
-        if (pixelUrl){
-            Network.img({
-                url: decodeURIComponent(pixelUrl),
-                method: 'GET',
-            });
-        }
-    }
-
-    /**
-     * Parses and extracts demand from adResponse according to the adapter and then attaches it
-     * to the corresponding bid's returnParcel in the correct format using targeting keys.
-     *
-     * @param {string} sessionId The sessionId, used for stats and other events.
-     *
-     * @param {any} adResponse This is the bid response as returned from the bid request, that was either
-     * passed to a JSONP callback or simply sent back via AJAX.
-     *
-     * @param {object[]} returnParcels The array of original parcels, SAME array that was passed to
-     * generateRequestObj to signal which slots need demand. In this funciton, the demand needs to be
-     * attached to each one of the objects for which the demand was originally requested for.
-     */
-    function __parseResponse(sessionId, adResponse, returnParcels) {
-
-
-        /* =============================================================================
-         * STEP 4  | Parse & store demand response
-         * -----------------------------------------------------------------------------
-         *
-         * Fill the below variables with information about the bid from the partner, using
-         * the adResponse variable that contains your module adResponse.
-         */
-
-        /* This an array of all the bids in your response that will be iterated over below. Each of
-         * these will be mapped back to a returnParcel object using some criteria explained below.
-         * The following variables will also be parsed and attached to that returnParcel object as
-         * returned demand.
-         *
-         * Use the adResponse variable to extract your bid information and insert it into the
-         * bids array. Each element in the bids array should represent a single bid and should
-         * match up to a single element from the returnParcel array.
-         *
-         */
-
-        /* ---------- Process adResponse and extract the bids into the bids array ------------*/
-
-        var bids = adResponse;
-
-        /* --------------------------------------------------------------------------------- */
-
-        for (var j = 0; j < returnParcels.length; j++) {
-
-            var curReturnParcel = returnParcels[j];
-
-            var headerStatsInfo = {};
-            var htSlotId = curReturnParcel.htSlot.getId();
-            headerStatsInfo[htSlotId] = {};
-            headerStatsInfo[htSlotId][curReturnParcel.requestId] = [curReturnParcel.xSlotName];
-
-            var curBid;
-
-            for (var i = 0; i < bids.length; i++) {
-
-                /**
-                 * This section maps internal returnParcels and demand returned from the bid request.
-                 * In order to match them correctly, they must be matched via some criteria. This
-                 * is usually some sort of placements or inventory codes. Please replace the someCriteria
-                 * key to a key that represents the placement in the configuration and in the bid responses.
-                 */
-
-                /* ----------- Fill this out to find a matching bid for the current parcel ------------- */
-                if (curReturnParcel.xSlotRef.someCriteria === bids[i].someCriteria) {
-                    curBid = bids[i];
-                    bids.splice(i, 1);
-                    break;
-                }
-            }
-
-            /* No matching bid found so its a pass */
-            if (!curBid) {
-                if (__profile.enabledAnalytics.requestTime) {
-                    __baseClass._emitStatsEvent(sessionId, 'hs_slot_pass', headerStatsInfo);
-                }
-                curReturnParcel.pass = true;
-                continue;
-            }
-
-            /* ---------- Fill the bid variables with data from the bid response here. ------------*/
-
-            /* Using the above variable, curBid, extract various information about the bid and assign it to
-             * these local variables */
-
-            /* the bid price for the given slot */
-            var bidPrice = curBid.price;
-
-            /* the size of the given slot */
-            var bidSize = [Number(curBid.width), Number(curBid.height)];
-
-            /* the creative/adm for the given slot that will be rendered if is the winner.
-             * Please make sure the URL is decoded and ready to be document.written.
-             */
-            var bidCreative = curBid.adm;
-
-            /* the dealId if applicable for this slot. */
-            var bidDealId = curBid.dealid;
-
-            /* explicitly pass */
-            var bidIsPass = bidPrice <= 0 ? true : false;
-
-            /* OPTIONAL: tracking pixel url to be fired AFTER rendering a winning creative.
-            * If firing a tracking pixel is not required or the pixel url is part of the adm,
-            * leave empty;
-            */
-            var pixelUrl = '';
-
-            /* ---------------------------------------------------------------------------------------*/
-
-            curBid = null;
-            if (bidIsPass) {
-                //? if (DEBUG) {
-                Scribe.info(__profile.partnerId + ' returned pass for { id: ' + adResponse.id + ' }.');
-                //? }
-                if (__profile.enabledAnalytics.requestTime) {
-                    __baseClass._emitStatsEvent(sessionId, 'hs_slot_pass', headerStatsInfo);
-                }
-                curReturnParcel.pass = true;
-                continue;
-            }
-
-            if (__profile.enabledAnalytics.requestTime) {
-                __baseClass._emitStatsEvent(sessionId, 'hs_slot_bid', headerStatsInfo);
-            }
-
-            curReturnParcel.size = bidSize;
-            curReturnParcel.targetingType = 'slot';
-            curReturnParcel.targeting = {};
-
-            var targetingCpm = '';
-
-            //? if (FEATURES.GPT_LINE_ITEMS) {
-            targetingCpm = __baseClass._bidTransformers.targeting.apply(bidPrice);
-            var sizeKey = Size.arrayToString(curReturnParcel.size);
-
-            if (bidDealId) {
-                curReturnParcel.targeting[__baseClass._configs.targetingKeys.pmid] = [sizeKey + '_' + bidDealId];
-                curReturnParcel.targeting[__baseClass._configs.targetingKeys.pm] = [sizeKey + '_' + targetingCpm];
-            } else {
-                curReturnParcel.targeting[__baseClass._configs.targetingKeys.om] = [sizeKey + '_' + targetingCpm];
-            }
-            curReturnParcel.targeting[__baseClass._configs.targetingKeys.id] = [curReturnParcel.requestId];
+        /* Check for missing seat bid (bidder error) */
+        if (!bidResponse.seatbid) {
+            //? if (DEBUG) {
+            Scribe.warn('Bidder response object missing "seatbid" object property.');
             //? }
 
-            //? if (FEATURES.RETURN_CREATIVE) {
-            curReturnParcel.adm = bidCreative;
-            if (pixelUrl) {
-                curReturnParcel.winNotice = __renderPixel.bind(null, pixelUrl);
-            }
-            //? }
-
-            //? if (FEATURES.RETURN_PRICE) {
-            curReturnParcel.price = Number(__baseClass._bidTransformers.price.apply(bidPrice));
-            //? }
-
-            var pubKitAdId = RenderService.registerAd({
+            EventsService.emit('hs_slot_error', {
                 sessionId: sessionId,
-                partnerId: __profile.partnerId,
-                adm: bidCreative,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
                 requestId: curReturnParcel.requestId,
-                size: curReturnParcel.size,
-                price: targetingCpm,
-                dealId: bidDealId || undefined,
-                timeOfExpiry: __profile.features.demandExpiry.enabled ? (__profile.features.demandExpiry.value + System.now()) : 0,
-                auxFn: __renderPixel,
-                auxArgs: [pixelUrl]
+                xSlotNames: [xSlotName]
             });
 
-            //? if (FEATURES.INTERNAL_RENDER) {
-            curReturnParcel.targeting.pubKitAdId = pubKitAdId;
-            //? }
+            return;
         }
+
+        /* Check for zero length seat bid (bidder pass) */
+        if (!bidResponse.seatbid.length) {
+            EventsService.emit('hs_slot_pass', {
+                sessionId: sessionId,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
+                requestId: curReturnParcel.requestId,
+                xSlotNames: [xSlotName]
+            });
+
+            curReturnParcel.pass = true;
+
+            return;
+        }
+
+        /* Check for missing bid (bidder error) */
+        if (!bidResponse.seatbid[0].bid) {
+            //? if (DEBUG) {
+            Scribe.warn('Seatbid object missing "bid" object property.');
+            //? }
+
+            EventsService.emit('hs_slot_error', {
+                sessionId: sessionId,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
+                requestId: curReturnParcel.requestId,
+                xSlotNames: [xSlotName]
+            });
+
+            return;
+        }
+
+        /* Check for zero length bid (bidder pass) */
+        if (!bidResponse.seatbid[0].bid.length || Number(bidResponse.seatbid[0].bid[0].price) <= 0) {
+            EventsService.emit('hs_slot_pass', {
+                sessionId: sessionId,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
+                requestId: curReturnParcel.requestId,
+                xSlotNames: [xSlotName]
+            });
+
+            curReturnParcel.pass = true;
+
+            return;
+        }
+
+        var bid = bidResponse.seatbid[0].bid[0];
+
+        /* Check for required bid object parameters */
+        if (!bid.hasOwnProperty('price') || !bid.hasOwnProperty('w') || !bid.hasOwnProperty('h') || !bid.hasOwnProperty('adm')) {
+            //? if (DEBUG) {
+            Scribe.warn('Bid object missing required properties.');
+            //? }
+
+            EventsService.emit('hs_slot_error', {
+                sessionId: sessionId,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
+                requestId: curReturnParcel.requestId,
+                xSlotNames: [xSlotName]
+            });
+
+            return;
+        }
+
+        /* Analytics event for bid received */
+        if (__profile.enabledAnalytics.requestTime) {
+            EventsService.emit('hs_slot_bid', {
+                sessionId: sessionId,
+                statsId: __profile.statsId,
+                htSlotId: htSlotId,
+                requestId: curReturnParcel.requestId,
+                xSlotNames: [xSlotName]
+            });
+        }
+
+        var bidPrice = bid.price;
+        var bidCreative = bid.adm;
+        var bidSize = [bid.w, bid.h];
+
+        curReturnParcel.targetingType = 'slot';
+        curReturnParcel.size = bidSize;
+        curReturnParcel.targeting = {};
+        var targetingCpm = '';
+
+        //? if(FEATURES.GPT_LINE_ITEMS) {
+        var sizeKey = Size.arrayToString(bidSize);
+        targetingCpm = __baseClass._bidTransformers.targeting.apply(bidPrice);
+
+        curReturnParcel.targeting[__baseClass._configs.targetingKeys.om] = [sizeKey + '_' + targetingCpm];
+        curReturnParcel.targeting[__baseClass._configs.targetingKeys.id] = [curReturnParcel.requestId];
+        //? }
+
+        //? if(FEATURES.RETURN_CREATIVE) {
+        curReturnParcel.adm = bidCreative;
+        //? }
+
+        //? if(FEATURES.RETURN_PRICE) {
+        /* Universal and PostBid both need to return the price */
+        curReturnParcel.price = Number(__baseClass._bidTransformers.price.apply(bidPrice));
+        //? }
+
+        var pubKitAdId = RenderService.registerAd({
+            sessionId: sessionId,
+            partnerId: __profile.partnerId,
+            adm: bidCreative,
+            requestId: curReturnParcel.requestId,
+            size: bidSize,
+            price: targetingCpm,
+            timeOfExpiry: __profile.features.demandExpiry.enabled ? (__profile.features.demandExpiry.value + System.now()) : 0
+        });
+
+        //? if(FEATURES.INTERNAL_RENDER) {
+        curReturnParcel.targeting.pubKitAdId = pubKitAdId;
+        //? }
     }
 
     /* =====================================
@@ -380,19 +293,11 @@ function PulsePointHtb(configs) {
         EventsService = SpaceCamp.services.EventsService;
         RenderService = SpaceCamp.services.RenderService;
 
-        /* =============================================================================
-         * STEP 1  | Partner Configuration
-         * -----------------------------------------------------------------------------
-         *
-         * Please fill out the below partner profile according to the steps in the README doc.
-         */
-
-        /* ---------- Please fill out this partner profile according to your module ------------*/
         __profile = {
-            partnerId: 'PulsePointHtb', // PartnerName
-            namespace: 'PulsePointHtb', // Should be same as partnerName
-            statsId: 'PPP', // Unique partner identifier
-            version: '2.1.1',
+            partnerId: 'PulsePointHtb',
+            namespace: 'PulsePointHtb',
+            statsId: 'PP',
+            version: '2.1.0',
             targetingType: 'slot',
             enabledAnalytics: {
                 requestTime: true
@@ -407,19 +312,16 @@ function PulsePointHtb(configs) {
                     value: 0
                 }
             },
-            targetingKeys: { // Targeting keys for demand, should follow format ix_{statsId}_id
-                id: 'ix_ppp_id',
-                om: 'ix_ppp_cpm',
-                pm: 'ix_ppp_cpm',
-                pmid: 'ix_ppp_dealid'
+            targetingKeys: {
+                id: 'ix_pp_id',
+                om: 'ix_pp_om'
             },
-            bidUnitInCents: 1, // The bid price unit (in cents) the endpoint returns, please refer to the readme for details
+            bidUnitInCents: 100,
             lineItemType: Constants.LineItemTypes.ID_AND_SIZE,
-            callbackType: Partner.CallbackTypes.ID, // Callback type, please refer to the readme for details
-            architecture: Partner.Architectures.SRA, // Request architecture, please refer to the readme for details
-            requestType: Partner.RequestTypes.ANY // Request type, jsonp, ajax, or any.
+            callbackType: Partner.CallbackTypes.NONE,
+            architecture: Partner.Architectures.MRA,
+            requestType: Partner.RequestTypes.AJAX
         };
-        /* ---------------------------------------------------------------------------------------*/
 
         //? if (DEBUG) {
         var results = ConfigValidators.partnerBaseConfig(configs) || PartnerSpecificValidator(configs);
@@ -429,10 +331,11 @@ function PulsePointHtb(configs) {
         }
         //? }
 
+        __baseUrl = Browser.getProtocol() + '//bid.contextweb.com/header/ortb';
+
         __baseClass = Partner(__profile, configs, null, {
             parseResponse: __parseResponse,
-            generateRequestObj: __generateRequestObj,
-            adResponseCallback: adResponseCallback
+            generateRequestObj: __generateRequestObj
         });
     })();
 
@@ -456,16 +359,16 @@ function PulsePointHtb(configs) {
          * ---------------------------------- */
 
         //? if (TEST) {
-        profile: __profile,
+        __profile: __profile,
+        __baseUrl: __baseUrl,
         //? }
 
         /* Functions
          * ---------------------------------- */
 
         //? if (TEST) {
-        parseResponse: __parseResponse,
-        generateRequestObj: __generateRequestObj,
-        adResponseCallback: adResponseCallback,
+        __render: __render,
+        __parseResponse: __parseResponse
         //? }
     };
 

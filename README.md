@@ -162,7 +162,7 @@ Each parcel is an object in the following form:
 
 ```javascript
 {
-    "partnerId": "PPP",
+    "partnerId": "PP",
     "htSlot": {
       "__type__": "HeaderTagSlot"
     },
@@ -359,7 +359,7 @@ After filling out these objects, the resulting returnParcel objects should look 
 
 ```javascript
 {
-    "partnerId": "PPP",
+    "partnerId": "PP",
     "htSlot": {
       "__type__": "HeaderTagSlot"
     },
@@ -374,8 +374,8 @@ After filling out these objects, the resulting returnParcel objects should look 
     // notice these new fields with demand
     "targetingType": "slot"
     "targeting" : {
-        "ix_ppp_id": ["_230l09jd2"],
-        "ix_ppp_cpm": ["300x250_2.50"]
+        "ix_pp_id": ["_230l09jd2"],
+        "ix_pp_cpm": ["300x250_2.50"]
     },
     "price": 2.50,
     "size": [300,250],
